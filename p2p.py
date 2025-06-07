@@ -69,6 +69,14 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     del peer_list[peer_id]
                 except:
                     pass
+                if peer_id in peers and websocket in peers[peer_id]:
+                    peers[peer_id].remove(websocket)
+                    if not peers[peer_id]:
+                        del peers[peer_id]
+                to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
+                for rid in to_remove:
+                    del requests[rid]
+                logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")                
                 break
             except Exception as e:
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
@@ -148,14 +156,14 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     except Exception as e:
         logger.error(f"Erro inesperado no websocket do peer {peer_id}: {e}")
 
-    finally:
-        #if peer_id in peers_list:
-        #   peers_list.remove(peer_id)
-        if peer_id in peers and websocket in peers[peer_id]:
-            peers[peer_id].remove(websocket)
-            if not peers[peer_id]:
-                del peers[peer_id]
-        to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
-        for rid in to_remove:
-            del requests[rid]
-        logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")
+    # finally:
+    #     #if peer_id in peers_list:
+    #     #   peers_list.remove(peer_id)
+    #     if peer_id in peers and websocket in peers[peer_id]:
+    #         peers[peer_id].remove(websocket)
+    #         if not peers[peer_id]:
+    #             del peers[peer_id]
+    #     to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
+    #     for rid in to_remove:
+    #         del requests[rid]
+    #     logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")
