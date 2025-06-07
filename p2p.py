@@ -59,7 +59,6 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
     peers.setdefault(peer_id, []).append(websocket)
     logger.info(f"Peer {peer_id} conectado. Total peers: {sum(len(v) for v in peers.values())}")
-    peers_list.append(peer_id)
     try:
         while True:
             try:
@@ -70,6 +69,8 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
             except Exception as e:
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
                 continue
+
+            peers_list.append(peer_id)
 
             msg_type = data.get("type")
             request_id = data.get("request_id")
