@@ -1,23 +1,20 @@
+import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, HTMLResponse
 import logging
 from typing import Dict, Any, List
-import asyncio
-import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("p2p-proxy")
 
 app = FastAPI(title="P2P Proxy Server")
 
-# Armazena peers conectados: {peer_id: [websocket, websocket, ...]}
 peers: Dict[str, List[WebSocket]] = {}
 peer_list = {}
-
-# Armazena requests pendentes: {request_id: {client_id, source_peer_id, request_type}}
 requests: Dict[str, Dict[str, Any]] = {}
 
 def is_valid_url(url: str) -> bool:
+    import re
     try:
         return bool(re.match(r'^https?://[^\s/$.?#].[^\s]*$', url))
     except:
@@ -40,15 +37,8 @@ async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None
             peers[peer_id].remove(ws)
     if not peers[peer_id]:
         del peers[peer_id]
-
-async def keep_alive_ping(websocket: WebSocket, interval: int = 5):
-    try:
-        while True:
-            await asyncio.sleep(interval)
-            await websocket.send_json({"type": "ping"})
-    except Exception:
-        # Possível desconexão do websocket, sai da task
-        pass
+        if peer_id in peer_list:
+            del peer_list[peer_id]
 
 @app.get("/peers")
 async def list_peers():
@@ -64,26 +54,35 @@ async def home():
     </ul>
     """)
 
+async def ping_pong(websocket: WebSocket, peer_id: str):
+    try:
+        while True:
+            await asyncio.sleep(20)  # intervalo de ping (20s)
+            await websocket.send_json({"type": "ping"})
+    except Exception as e:
+        logger.info(f"Ping task encerrado para {peer_id}: {e}")
+
 @app.websocket("/ws/{peer_id}")
 async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
     peers.setdefault(peer_id, []).append(websocket)
-    logger.info(f"Peer {peer_id} conectado. Total conexões: {sum(len(v) for v in peers.values())}")
+    if peer_id not in peer_list:
+        peer_list[peer_id] = 'websocket'
 
-    ping_task = asyncio.create_task(keep_alive_ping(websocket))
+    logger.info(f"Peer {peer_id} conectado. Total peers: {sum(len(v) for v in peers.values())}")
+
+    ping_task = asyncio.create_task(ping_pong(websocket, peer_id))
 
     try:
         while True:
             try:
                 data = await websocket.receive_json()
             except WebSocketDisconnect:
-                logger.info(f"Peer {peer_id} desconectado (WebSocketDisconnect)")
+                logger.info(f"Peer {peer_id} desconectado")
                 break
             except Exception as e:
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
                 continue
-
-            peer_list[peer_id] = 'websocket'
 
             msg_type = data.get("type")
             request_id = data.get("request_id")
@@ -141,18 +140,17 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     "from": client_id
                 }, exclude_ws=websocket)
 
-            elif msg_type == "response":
-                if request_id in requests:
-                    client_id = requests[request_id]["client_id"]
-                    await send_to_peer(client_id, data)
-
-            elif msg_type == "error":
+            elif msg_type == "response" or msg_type == "error":
                 if request_id in requests:
                     client_id = requests[request_id]["client_id"]
                     await send_to_peer(client_id, data)
 
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong", "request_id": request_id})
+
+            elif msg_type == "pong":
+                # Pode usar para atualizar timestamp de atividade se quiser
+                pass
 
     except Exception as e:
         logger.error(f"Erro inesperado no websocket do peer {peer_id}: {e}")
@@ -163,11 +161,9 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
             peers[peer_id].remove(websocket)
             if not peers[peer_id]:
                 del peers[peer_id]
+                if peer_id in peer_list:
+                    del peer_list[peer_id]
         to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
         for rid in to_remove:
             del requests[rid]
-        try:
-            del peer_list[peer_id]
-        except KeyError:
-            pass
         logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")
