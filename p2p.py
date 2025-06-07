@@ -10,6 +10,7 @@ app = FastAPI(title="P2P Proxy Server")
 
 # Armazena peers conectados: {peer_id: [websocket, websocket, ...]}
 peers: Dict[str, List[WebSocket]] = {}
+peers_list = []
 
 # Armazena requests pendentes: {request_id: {client_id, source_peer_id, request_type}}
 requests: Dict[str, Dict[str, Any]] = {}
@@ -41,15 +42,15 @@ async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None
 
 @app.get("/peers")
 async def list_peers():
-    logger.info(f"Peers ativos: {list(peers.keys())}")
-    return JSONResponse(content={"connected_peers": list(peers.keys())})
+    logger.info(f"Peers ativos: {list(peers_list}")
+    return JSONResponse(content={"connected_peers": list(peers_list}})
 
 @app.get("/")
 async def home():
     return HTMLResponse(content=f"""
     <h1>Peers conectados</h1>
     <ul>
-        {''.join(f"<li>{peer}</li>" for peer in peers)}
+        {''.join(f"<li>{peer}</li>" for peer in peers_list)}
     </ul>
     """)
 
@@ -58,7 +59,7 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
     peers.setdefault(peer_id, []).append(websocket)
     logger.info(f"Peer {peer_id} conectado. Total peers: {sum(len(v) for v in peers.values())}")
-
+    peers_list.append(peer_id)
     try:
         while True:
             try:
@@ -143,6 +144,8 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
         logger.error(f"Erro inesperado no websocket do peer {peer_id}: {e}")
 
     finally:
+        if peer_id in peers_list:
+            peers_list.remove(peer_id)
         if peer_id in peers and websocket in peers[peer_id]:
             peers[peer_id].remove(websocket)
             if not peers[peer_id]:
