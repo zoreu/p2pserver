@@ -10,7 +10,7 @@ app = FastAPI(title="P2P Proxy Server")
 
 # Armazena peers conectados: {peer_id: [websocket, websocket, ...]}
 peers: Dict[str, List[WebSocket]] = {}
-peers_list = []
+peer_list = {}
 
 # Armazena requests pendentes: {request_id: {client_id, source_peer_id, request_type}}
 requests: Dict[str, Dict[str, Any]] = {}
@@ -42,15 +42,15 @@ async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None
 
 @app.get("/peers")
 async def list_peers():
-    logger.info(f"Peers ativos: {list(peers_list)}")
-    return JSONResponse(content={"connected_peers": list(peers_list)})
+    logger.info(f"Peers ativos: {list(peer_list.keys())}")
+    return JSONResponse(content={"connected_peers": list(peer_list.keys())})
 
 @app.get("/")
 async def home():
     return HTMLResponse(content=f"""
     <h1>Peers conectados</h1>
     <ul>
-        {''.join(f"<li>{peer}</li>" for peer in peers_list)}
+        {''.join(f"<li>{peer}</li>" for peer in list(peer_list.keys())}
     </ul>
     """)
 
@@ -66,7 +66,7 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
             except WebSocketDisconnect:
                 logger.info(f"Peer {peer_id} desconectado")
                 try:
-                    peers_list.remove(peer_id)
+                    del peer_list[peer_id]
                 except:
                     pass
                 break
@@ -74,7 +74,7 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
                 continue
 
-            peers_list.append(peer_id)
+            peer_list['peer_id'] = 'websocket'
 
             msg_type = data.get("type")
             request_id = data.get("request_id")
