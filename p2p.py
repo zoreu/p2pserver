@@ -50,7 +50,7 @@ async def home():
     return HTMLResponse(content=f"""
     <h1>Peers conectados</h1>
     <ul>
-        {''.join(f"<li>{peer}</li>" for peer in list(peer_list.keys())}
+        {''.join(f"<li>{peer}</li>" for peer in list(peer_list.keys()))}
     </ul>
     """)
 
