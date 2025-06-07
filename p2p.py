@@ -1,17 +1,16 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, HTMLResponse
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("p2p-proxy")
 
 app = FastAPI(title="P2P Proxy Server")
 
-# Armazena peers conectados: {peer_id: websocket}
-peers: Dict[str, WebSocket] = {}
+# Agora peers guarda lista de websockets por peer_id
+peers: Dict[str, List[WebSocket]] = {}
 
-# Armazena requests pendentes: {request_id: {client_id, source_peer_id, request_type}}
 requests: Dict[str, Dict[str, Any]] = {}
 
 def is_valid_url(url: str) -> bool:
@@ -24,8 +23,13 @@ def is_valid_url(url: str) -> bool:
 @app.websocket("/ws/{peer_id}")
 async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
-    peers[peer_id] = websocket
-    logger.info(f"Peer {peer_id} conectado. Total peers: {len(peers)}")
+
+    # Adiciona websocket à lista do peer_id
+    if peer_id not in peers:
+        peers[peer_id] = []
+    peers[peer_id].append(websocket)
+
+    logger.info(f"Peer {peer_id} conectado. Total conexões desse peer: {len(peers[peer_id])}. Total peers: {len(peers)}")
 
     try:
         while True:
@@ -34,7 +38,6 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
             request_id = data.get("request_id")
 
             if msg_type == "request":
-                # Cliente A envia requisição para acessar URL
                 url = data.get("url")
                 method = data.get("method", "GET").upper()
                 headers = data.get("headers", {})
@@ -46,21 +49,19 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     await websocket.send_json({"type": "error", "message": "URL inválida", "request_id": request_id})
                     continue
 
-                # Criar request_id único se não veio
                 if not request_id:
                     request_id = f"{client_id}_{url[:50]}"
 
-                # Armazena a requisição
                 requests[request_id] = {
                     "client_id": client_id,
                     "source_peer_id": None,
                     "request_type": request_type
                 }
 
-                # Escolhe peer que NÃO seja o cliente que fez a requisição
-                target_peer_id = next((p for p in peers if p != client_id), None)
-
-                if not target_peer_id:
+                # Escolher qualquer peer que NÃO seja o cliente que fez a requisição
+                # Aqui pegamos todos peers exceto o cliente solicitante
+                possible_targets = [pid for pid in peers if pid != client_id]
+                if not possible_targets:
                     await websocket.send_json({
                         "type": "error",
                         "message": "Nenhum peer disponível para processar a requisição",
@@ -68,46 +69,59 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     })
                     continue
 
+                # Pode escolher um peer aleatório, aqui escolho o primeiro para simplicidade
+                target_peer_id = possible_targets[0]
                 requests[request_id]["source_peer_id"] = target_peer_id
 
-                # Envia a requisição para o peer "executor"
-                await peers[target_peer_id].send_json({
-                    "type": "fetch",
-                    "url": url,
-                    "method": method,
-                    "headers": headers,
-                    "body": body,
-                    "request_id": request_id,
-                    "request_type": request_type,
-                    "from": client_id
-                })
+                # Envia a requisição para todos sockets do peer "executor"
+                for ws in peers[target_peer_id]:
+                    await ws.send_json({
+                        "type": "fetch",
+                        "url": url,
+                        "method": method,
+                        "headers": headers,
+                        "body": body,
+                        "request_id": request_id,
+                        "request_type": request_type,
+                        "from": client_id
+                    })
 
             elif msg_type == "response":
-                # Peer "executor" responde para o peer solicitante
+                # Envia para todos sockets do cliente que solicitou
                 if request_id in requests:
                     client_id = requests[request_id]["client_id"]
                     if client_id in peers:
-                        await peers[client_id].send_json(data)
+                        for ws in peers[client_id]:
+                            await ws.send_json(data)
                     else:
                         logger.warning(f"Peer cliente {client_id} desconectado para request_id {request_id}")
 
             elif msg_type == "error":
-                # Encaminha erro para o cliente que solicitou
+                # Encaminha erro para todos sockets do cliente que solicitou
                 if request_id in requests:
                     client_id = requests[request_id]["client_id"]
                     if client_id in peers:
-                        await peers[client_id].send_json(data)
+                        for ws in peers[client_id]:
+                            await ws.send_json(data)
 
     except WebSocketDisconnect:
         logger.info(f"Peer {peer_id} desconectado")
     except Exception as e:
         logger.error(f"Erro no websocket do peer {peer_id}: {e}")
     finally:
+        # Remove só esse websocket da lista do peer_id
         if peer_id in peers:
-            del peers[peer_id]
-        # Limpa requests que envolvem este peer
-        to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
+            try:
+                peers[peer_id].remove(websocket)
+                if not peers[peer_id]:  # lista vazia
+                    del peers[peer_id]
+            except Exception:
+                pass
+
+        # Remove requests que envolvam esse peer
+        to_remove = [rid for rid, info in requests.items()
+                     if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
         for rid in to_remove:
             del requests[rid]
-        logger.info(f"Peer {peer_id} removido. Peers restantes: {len(peers)}")
 
+        logger.info(f"Peer {peer_id} removido/conexão fechada. Peers restantes: {len(peers)}")
