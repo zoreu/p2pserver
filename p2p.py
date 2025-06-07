@@ -22,9 +22,6 @@ def is_valid_url(url: str) -> bool:
         return False
 
 async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None):
-    """
-    Envia mensagem para todas conexões do peer_id, exceto exclude_ws.
-    """
     if peer_id not in peers:
         return
     to_remove = []
@@ -47,6 +44,15 @@ async def list_peers():
     logger.info(f"Peers ativos: {list(peers.keys())}")
     return JSONResponse(content={"connected_peers": list(peers.keys())})
 
+@app.get("/")
+async def home():
+    return HTMLResponse(content=f"""
+    <h1>Peers conectados</h1>
+    <ul>
+        {''.join(f"<li>{peer}</li>" for peer in peers)}
+    </ul>
+    """)
+
 @app.websocket("/ws/{peer_id}")
 async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
@@ -55,7 +61,15 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
 
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                logger.info(f"Peer {peer_id} desconectado")
+                break
+            except Exception as e:
+                logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
+                continue
+
             msg_type = data.get("type")
             request_id = data.get("request_id")
 
@@ -80,7 +94,6 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     "request_type": request_type
                 }
 
-                # Verifica se o cliente especificou um peer de destino
                 target_peer_id = data.get("target_peer_id")
                 if target_peer_id:
                     if target_peer_id not in peers or not peers[target_peer_id]:
@@ -91,7 +104,6 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                         })
                         continue
                 else:
-                    # Fallback automático: escolhe outro peer
                     target_peer_id = next((p for p in peers if p != client_id), None)
                     if not target_peer_id:
                         await websocket.send_json({
@@ -124,10 +136,12 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     client_id = requests[request_id]["client_id"]
                     await send_to_peer(client_id, data)
 
-    except WebSocketDisconnect:
-        logger.info(f"Peer {peer_id} desconectado")
+            elif msg_type == "ping":
+                await websocket.send_json({"type": "pong", "request_id": request_id})
+
     except Exception as e:
-        logger.error(f"Erro no websocket do peer {peer_id}: {e}")
+        logger.error(f"Erro inesperado no websocket do peer {peer_id}: {e}")
+
     finally:
         if peer_id in peers and websocket in peers[peer_id]:
             peers[peer_id].remove(websocket)
