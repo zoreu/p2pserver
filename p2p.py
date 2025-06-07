@@ -2,6 +2,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, HTMLResponse
 import logging
 from typing import Dict, Any, List
+import asyncio
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("p2p-proxy")
@@ -16,7 +18,6 @@ peer_list = {}
 requests: Dict[str, Dict[str, Any]] = {}
 
 def is_valid_url(url: str) -> bool:
-    import re
     try:
         return bool(re.match(r'^https?://[^\s/$.?#].[^\s]*$', url))
     except:
@@ -40,6 +41,15 @@ async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None
     if not peers[peer_id]:
         del peers[peer_id]
 
+async def keep_alive_ping(websocket: WebSocket, interval: int = 5):
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            await websocket.send_json({"type": "ping"})
+    except Exception:
+        # Possível desconexão do websocket, sai da task
+        pass
+
 @app.get("/peers")
 async def list_peers():
     logger.info(f"Peers ativos: {list(peer_list.keys())}")
@@ -58,25 +68,16 @@ async def home():
 async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
     peers.setdefault(peer_id, []).append(websocket)
-    logger.info(f"Peer {peer_id} conectado. Total peers: {sum(len(v) for v in peers.values())}")
+    logger.info(f"Peer {peer_id} conectado. Total conexões: {sum(len(v) for v in peers.values())}")
+
+    ping_task = asyncio.create_task(keep_alive_ping(websocket))
+
     try:
         while True:
             try:
                 data = await websocket.receive_json()
             except WebSocketDisconnect:
-                logger.info(f"Peer {peer_id} desconectado")
-                try:
-                    del peer_list[peer_id]
-                except:
-                    pass
-                if peer_id in peers and websocket in peers[peer_id]:
-                    peers[peer_id].remove(websocket)
-                    if not peers[peer_id]:
-                        del peers[peer_id]
-                to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
-                for rid in to_remove:
-                    del requests[rid]
-                logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")                
+                logger.info(f"Peer {peer_id} desconectado (WebSocketDisconnect)")
                 break
             except Exception as e:
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
@@ -156,14 +157,17 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     except Exception as e:
         logger.error(f"Erro inesperado no websocket do peer {peer_id}: {e}")
 
-    # finally:
-    #     #if peer_id in peers_list:
-    #     #   peers_list.remove(peer_id)
-    #     if peer_id in peers and websocket in peers[peer_id]:
-    #         peers[peer_id].remove(websocket)
-    #         if not peers[peer_id]:
-    #             del peers[peer_id]
-    #     to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
-    #     for rid in to_remove:
-    #         del requests[rid]
-    #     logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")
+    finally:
+        ping_task.cancel()
+        if peer_id in peers and websocket in peers[peer_id]:
+            peers[peer_id].remove(websocket)
+            if not peers[peer_id]:
+                del peers[peer_id]
+        to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
+        for rid in to_remove:
+            del requests[rid]
+        try:
+            del peer_list[peer_id]
+        except KeyError:
+            pass
+        logger.info(f"Peer {peer_id} removido. Peers restantes: {sum(len(v) for v in peers.values())}")
