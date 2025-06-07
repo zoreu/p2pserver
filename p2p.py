@@ -65,6 +65,10 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                 data = await websocket.receive_json()
             except WebSocketDisconnect:
                 logger.info(f"Peer {peer_id} desconectado")
+                try:
+                    peers_list.remove(peer_id)
+                except:
+                    pass
                 break
             except Exception as e:
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
@@ -145,8 +149,8 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
         logger.error(f"Erro inesperado no websocket do peer {peer_id}: {e}")
 
     finally:
-        if peer_id in peers_list:
-            peers_list.remove(peer_id)
+        #if peer_id in peers_list:
+        #   peers_list.remove(peer_id)
         if peer_id in peers and websocket in peers[peer_id]:
             peers[peer_id].remove(websocket)
             if not peers[peer_id]:
