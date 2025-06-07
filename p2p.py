@@ -74,7 +74,7 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                 logger.warning(f"Erro ao processar mensagem do peer {peer_id}: {e}")
                 continue
 
-            peer_list['peer_id'] = 'websocket'
+            peer_list[peer_id] = 'websocket'
 
             msg_type = data.get("type")
             request_id = data.get("request_id")
