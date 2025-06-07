@@ -36,18 +36,19 @@ async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None
         except Exception as e:
             logger.warning(f"Erro ao enviar mensagem para peer {peer_id}: {e}")
             to_remove.append(ws)
-    # Remove websockets inválidos
     for ws in to_remove:
         if ws in peers[peer_id]:
             peers[peer_id].remove(ws)
-    # Remove peer_id se não tiver mais conexões
     if not peers[peer_id]:
         del peers[peer_id]
+
+@app.get("/peers")
+async def list_peers():
+    return JSONResponse(content={"connected_peers": list(peers.keys())})
 
 @app.websocket("/ws/{peer_id}")
 async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     await websocket.accept()
-    # Adiciona websocket à lista do peer_id
     peers.setdefault(peer_id, []).append(websocket)
     logger.info(f"Peer {peer_id} conectado. Total peers: {sum(len(v) for v in peers.values())}")
 
@@ -78,20 +79,29 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
                     "request_type": request_type
                 }
 
-                # Escolhe peer que NÃO seja o cliente que fez a requisição
-                target_peer_id = next((p for p in peers if p != client_id), None)
-
-                if not target_peer_id:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": "Nenhum peer disponível para processar a requisição",
-                        "request_id": request_id
-                    })
-                    continue
+                # Verifica se o cliente especificou um peer de destino
+                target_peer_id = data.get("target_peer_id")
+                if target_peer_id:
+                    if target_peer_id not in peers or not peers[target_peer_id]:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"O peer de destino '{target_peer_id}' não está disponível",
+                            "request_id": request_id
+                        })
+                        continue
+                else:
+                    # Fallback automático: escolhe outro peer
+                    target_peer_id = next((p for p in peers if p != client_id), None)
+                    if not target_peer_id:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": "Nenhum peer disponível para processar a requisição",
+                            "request_id": request_id
+                        })
+                        continue
 
                 requests[request_id]["source_peer_id"] = target_peer_id
 
-                # Envia a requisição para todas conexões do peer executor, exceto a conexão que enviou
                 await send_to_peer(target_peer_id, {
                     "type": "fetch",
                     "url": url,
@@ -106,7 +116,6 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
             elif msg_type == "response":
                 if request_id in requests:
                     client_id = requests[request_id]["client_id"]
-                    # Envia a resposta para todas conexões do cliente
                     await send_to_peer(client_id, data)
 
             elif msg_type == "error":
@@ -119,12 +128,10 @@ async def websocket_endpoint(websocket: WebSocket, peer_id: str):
     except Exception as e:
         logger.error(f"Erro no websocket do peer {peer_id}: {e}")
     finally:
-        # Remove websocket da lista do peer_id
         if peer_id in peers and websocket in peers[peer_id]:
             peers[peer_id].remove(websocket)
             if not peers[peer_id]:
                 del peers[peer_id]
-        # Limpa requests que envolvem este peer
         to_remove = [rid for rid, info in requests.items() if info["client_id"] == peer_id or info["source_peer_id"] == peer_id]
         for rid in to_remove:
             del requests[rid]
