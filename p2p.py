@@ -44,6 +44,7 @@ async def send_to_peer(peer_id: str, message: dict, exclude_ws: WebSocket = None
 
 @app.get("/peers")
 async def list_peers():
+    logger.info(f"Peers ativos: {list(peers.keys())}")
     return JSONResponse(content={"connected_peers": list(peers.keys())})
 
 @app.websocket("/ws/{peer_id}")
